@@ -139,6 +139,12 @@ class GoogleCalendarSkill(MycroftSkill):
             .build()
         self.register_intent(intent, self.get_next)
 
+        intent = IntentBuilder('GetTodayAppointmentIntent')\
+            .require('TodayKeyword')\
+            .one_of('AppointmentKeyword', 'ScheduleKeyword')\
+            .build()
+        self.register_intent(intent, self.get_event_today)
+
         intent = IntentBuilder('GetDaysAppointmentsIntent')\
             .require('QueryKeyword')\
             .one_of('AppointmentKeyword', 'ScheduleKeyword')\
@@ -154,6 +160,57 @@ class GoogleCalendarSkill(MycroftSkill):
     def initialize(self):
         self.schedule_event(self.__calendar_connect, datetime.now(),
                             name='calendar_connect')
+
+    def get_event_today(self, msg=None):
+        now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        eventsResult = self.service.events().list(
+            calendarId='primary', timeMin=now, maxResults=10,
+            singleEvents=True, orderBy='startTime').execute()
+        events = eventsResult.get('items', [])
+
+        if not events:
+            self.speak_dialog('NoNextAppointments')
+        else:
+            #get first 5 events of today
+            for event in events:
+                LOG.debug(event)
+                if not is_wholeday_event(event):
+                    start = event['start'].get('dateTime')
+                    d = datetime.strptime(remove_tz(start), '%Y-%m-%dT%H:%M:%S')
+                    starttime = nice_time(d, self.lang, True, self.use_24hour,
+                                        True)
+                    startdate = d.strftime('%-d %B')
+                else:
+                    start = event['start']['date']
+                    d = datetime.strptime(start, '%Y-%m-%d')
+                    startdate = d.strftime('%-d %B')
+                    starttime = None
+                # Speak result
+                if starttime is None:
+                    if d.date() == datetime.today().date():
+                        data = {'appointment': event['summary']}
+                        self.speak_dialog('NextAppointmentWholeToday', data)
+                    elif is_tomorrow(d):
+                        data = {'appointment': event['summary']}
+                        self.speak_dialog('NextAppointmentWholeTomorrow', data)
+                    else:
+                        data = {'appointment': event['summary'],
+                                'date': startdate}
+                        self.speak_dialog('NextAppointmentWholeDay', data)
+                elif d.date() == datetime.today().date():
+                    data = {'appointment': event['summary'],
+                            'time': starttime}
+                    self.speak_dialog('NextAppointment', data)
+                elif is_tomorrow(d):
+                    data = {'appointment': event['summary'],
+                            'time': starttime}
+                    self.speak_dialog('NextAppointmentTomorrow', data)
+                else:
+                    data = {'appointment': event['summary'],
+                            'time': starttime,
+                            'date': startdate}
+                    self.speak_dialog('NextAppointmentDate', data)
+
 
     def get_next(self, msg=None):
         now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
