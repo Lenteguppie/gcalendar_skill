@@ -167,7 +167,7 @@ class GoogleCalendarSkill(MycroftSkill):
         today = datetime.now()
         today_end = today.replace(hour=23,minute=59,second=59)
         eventsResult = self.service.events().list(
-            calendarId='primary', timeMin=today, timeMax=today_end, maxResults=10,
+            calendarId='primary', timeMin=today_end, timeMax=today, maxResults=10,
             singleEvents=True, orderBy='startTime').execute()
         events = eventsResult.get('items', [])
 
