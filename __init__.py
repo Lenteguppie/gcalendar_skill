@@ -162,13 +162,12 @@ class GoogleCalendarSkill(MycroftSkill):
                             name='calendar_connect')
 
     def get_event_today(self, msg=None):
-        now = datetime.utcnow()
-        now_iso = now.isoformat() + 'Z'  # 'Z' indicates UTC time
-        endday = now.replace(hour=23,minute=59,second=59).isoformat()
-        # today = datetime.now()
-        # today_end = now.replace(hour=23,minute=59,second=59)
+        # now = datetime.utcnow()
+        # now_iso = now.isoformat() + 'Z'  # 'Z' indicates UTC time
+        today = datetime.utcnow()
+        today_end = today.replace(hour=23,minute=59,second=59).isoformat()
         eventsResult = self.service.events().list(
-            calendarId='primary', timeMin=now_iso, maxResults=10,
+            calendarId='primary', timeMin=today.isoformat(), timeMax=today_end, maxResults=10,
             singleEvents=True, orderBy='startTime').execute()
         events = eventsResult.get('items', [])
 
@@ -178,6 +177,9 @@ class GoogleCalendarSkill(MycroftSkill):
             #get first 5 events of today
             for event in events:
                 LOG.debug(event)
+                event_start = event['start'].get('dateTime')
+                event_d = datetime.strptime(remove_tz(event_start), '%Y-%m-%dT%H:%M:%S')
+                
                 if not is_wholeday_event(event):
                     start = event['start'].get('dateTime')
                     d = datetime.strptime(remove_tz(start), '%Y-%m-%dT%H:%M:%S')
