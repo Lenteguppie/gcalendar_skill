@@ -162,12 +162,13 @@ class GoogleCalendarSkill(MycroftSkill):
                             name='calendar_connect')
 
     def get_event_today(self, msg=None):
-        now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        # endday = datetime(now['date'])
+        now = datetime.utcnow()
+        now_iso = now.isoformat() + 'Z'  # 'Z' indicates UTC time
+        endday = now.replace(hour=23,minute=59,second=59).isoformat()
         # today = datetime.now()
-        today_end = now.replace(hour=23,minute=59,second=59)
+        # today_end = now.replace(hour=23,minute=59,second=59)
         eventsResult = self.service.events().list(
-            calendarId='primary', timeMin=today_end, timeMax=now, maxResults=10,
+            calendarId='primary', timeMax=endday, timeMin=now_iso, maxResults=10,
             singleEvents=True, orderBy='startTime').execute()
         events = eventsResult.get('items', [])
 
