@@ -163,8 +163,9 @@ class GoogleCalendarSkill(MycroftSkill):
 
     def get_event_today(self, msg=None):
         now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        endday = now.replace(hour=23, minute=59)
         eventsResult = self.service.events().list(
-            calendarId='primary', timeMin=now, maxResults=10,
+            calendarId='primary', timeMin=now, timeMax=endday, maxResults=10,
             singleEvents=True, orderBy='startTime').execute()
         events = eventsResult.get('items', [])
 
@@ -210,7 +211,6 @@ class GoogleCalendarSkill(MycroftSkill):
                             'time': starttime,
                             'date': startdate}
                     self.speak_dialog('NextAppointmentDate', data)
-
 
     def get_next(self, msg=None):
         now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
