@@ -165,7 +165,7 @@ class GoogleCalendarSkill(MycroftSkill):
         # now = datetime.utcnow()
         # now_iso = now.isoformat() + 'Z'  # 'Z' indicates UTC time
         now = datetime.utcnow()
-        now_iso = now.isoformat() 
+        now_iso = now.isoformat() + 'Z' 
         tomorrow = (now + timedelta(days=1)).replace(hour=0,minute=0,second=0).isoformat() + 'Z'  # 'Z' indicates UTC time
         
         eventsResult = self.service.events().list(
