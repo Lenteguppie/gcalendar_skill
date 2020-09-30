@@ -6,6 +6,7 @@ Fetches scheduled events from Google Calendar and supports the basics for adding
 
 ## Examples
 * "What's next on my calendar"
+* "What are my appointments for today"
 * "What's on my calendar on thursday"
 * "Add have fun to my calendar at 7 in the evening on saturday"
 
