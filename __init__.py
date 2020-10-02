@@ -213,7 +213,6 @@ class GoogleCalendarSkill(MycroftSkill):
         #retrieve the list of reminders known by google calendar
         #check for default reminders
         event_reminders = event['reminders']
-        LOG.info(str(event_reminders))
         reminder_list = []
         if 'useDefault' in event_reminders:
             reminder_default = event_reminders['useDefault']
@@ -248,7 +247,6 @@ class GoogleCalendarSkill(MycroftSkill):
         time_delta = (first_datetime - second_datetime)
         total_seconds = time_delta.total_seconds()
         minutes = total_seconds/60
-        print(f"minutes remaining: {minutes}")
         return minutes
 
     def get_event_today(self, msg=None):
