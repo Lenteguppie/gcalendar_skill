@@ -4,7 +4,7 @@ from mycroft.messagebus.message import Message
 from mycroft.util.log import LOG
 
 import httplib2
-from googleapiclient import discovery
+from googleapiclient import discovery, channel
 
 from os.path import dirname, join
 
@@ -16,14 +16,22 @@ from mycroft.util.parse import extract_datetime
 from mycroft.util import play_wav
 from mycroft.util import time as m_time
 
+import uuid
+
 from requests import HTTPError
 
 from .mycroft_token_cred import MycroftTokenCredentials
+from .local_save import LocalSave
 
 REMINDER_PING = join(dirname(__file__), 'twoBeep.wav')
 
+# reminder_chanel = new_webhook_channel("https://zod.aquariumnetwork.com/calendar")
+
 UTC_TZ = u'+00:00'
 
+events = []
+
+event_reminders = {}
 handled_reminders = {}
 
 MINUTES = 60  # seconds
@@ -105,6 +113,9 @@ def nice_time(dt, lang="en-us", speech=True, use_24hour=False,
             # lazy for now, let TTS handle speaking "03:22 PM" and such
         return string
 
+def remove_duplicates_list(x):
+  return list(dict.fromkeys(x))
+
 def to_local_tz(d):
     return m_time.to_local(d)
 
@@ -121,6 +132,15 @@ def is_wholeday_event(e):
 
 def remove_tz(string):
     return string[:-6]
+
+## TESTING callback receiver: 
+def construct_watch(address:str):
+    eventcollect = {
+        'id': str(uuid.uuid1()),
+        'type': "web_hook",
+        'address': address
+    }
+    return eventcollect
 
 class GoogleCalendarSkill(MycroftSkill):
     def __init__(self):
@@ -141,10 +161,20 @@ class GoogleCalendarSkill(MycroftSkill):
             self.service = discovery.build('calendar', 'v3', http=http)
             sys.argv = argv
             self.register_intents()
+            
             self.cancel_scheduled_event('calendar_connect')
+            self.sync_event_reminders()
+
+            #create a watch for google calendar push notifications
+            self.watch = construct_watch("https://yeplab.com:6455/googlecalendar")
+            self.watch_uuid= self.watch['id']
+            self.add_watch(self.watch)
         except HTTPError:
             LOG.info('No Credentials available')
             pass
+    
+    def add_watch(self, watch_body):
+        self.service.events().watch(calendarId='primary', body=watch_body).execute()
 
     def register_intents(self):
         intent = IntentBuilder('GetNextAppointmentIntent')\
@@ -152,6 +182,14 @@ class GoogleCalendarSkill(MycroftSkill):
             .one_of('AppointmentKeyword', 'ScheduleKeyword')\
             .build()
         self.register_intent(intent, self.get_next)
+        
+        intent = IntentBuilder('GetNextAppointmentIntent')\
+            .require('NextKeyword')\
+            .one_of('AppointmentKeyword', 'ScheduleKeyword')\
+            .build()
+        self.register_intent(intent, self.get_next)
+
+        
 
         intent = IntentBuilder('GetTodayAppointmentIntent')\
             .require('TodayKeyword')\
@@ -174,73 +212,140 @@ class GoogleCalendarSkill(MycroftSkill):
     def initialize(self):
         self.schedule_event(self.__calendar_connect, datetime.now(),
                             name='calendar_connect')
-        self.schedule_repeating_event(self.check_event_reminders, datetime.now(),
+        self.schedule_repeating_event(self.check_reminders, datetime.now(),
                                      30, name='reminders')
-        
-    def check_event_reminders(self, msg=None):
+    
+    @intent_file_handler('SynchroniseCalendar.intent')
+    def sync_event_reminders(self, msg=None):
+        #Get first ten events
         LOG.info("Searching for reminders...")
         now = datetime.utcnow()
         now_iso = now.isoformat() + 'Z' 
-        tomorrow = (now + timedelta(days=1)).replace(hour=0,minute=0,second=0).isoformat() + 'Z'  # 'Z' indicates UTC time
-        
-        #Get first ten events
         eventsResult = self.service.events().list(
             calendarId='primary', timeMin=now_iso, maxResults=10,
             singleEvents=True, orderBy='startTime').execute()
         events = eventsResult.get('items', [])
-        
-        if not events:
-            LOG.info("[Event_reminders] - no events today...")
-        else:
-            for event in events:
-                if not is_wholeday_event(event): #only check the non wholeday events
-                    self.add_reminder(event)
-        
+
+        for e in events:
+            self.add_reminder(e)
+        self.speak("Yay calendar synced! :D")
+    
     def add_reminder(self, event):
-        #get the start_time and convert from UTC ISO format to datetime format
-        event_start = event['start'].get('dateTime')
-        e_start = datetime.fromisoformat(event_start)
-        
-        #construct dict to keep track of already handled reminders
+        events.append(event)
         event_summary = event['summary']
-        if not event_summary in handled_reminders:
-            handled_reminders[event_summary] = {}
-        if not str(e_start) in handled_reminders[event_summary]:
-            handled_reminders[event_summary][str(e_start)] = {}
-        if not 'handled' in handled_reminders[event_summary][str(e_start)]:
-            handled_reminders[event_summary][str(e_start)]['handled'] = []
-                 
-        #retrieve the list of reminders known by google calendar
-        #check for default reminders
-        event_reminders = event['reminders']
+        reminders = event['reminders']
+        LOG.info("reminders from event: {}".format(reminders))
+
         reminder_list = []
-        if 'useDefault' in event_reminders:
-            reminder_default = event_reminders['useDefault']
+        if 'useDefault' in reminders:
+            reminder_default = reminders['useDefault']
             if reminder_default:
                 reminder_list.append(10)
         
         #check for custom created reminders
-        if 'overrides' in event_reminders:
-            reminder_override = event_reminders['overrides']
+        if 'overrides' in reminders:
+            reminder_override = reminders['overrides']
             for rem in reminder_override:
                 reminder_list.append(rem['minutes'])
-        
-        for reminder in reminder_list:
-            #check if reminder is already handled
-            if reminder in handled_reminders[event_summary][str(e_start)]['handled']:
-                LOG.debug(f"reminder {reminder} for {event_summary} already handled!")
+        # r = {"reminders": reminder_list, "event": event}
+        temp_dict = {event_summary:{"reminders": reminder_list, "event": event}}
+        event_reminders.update(temp_dict)
+        LOG.info("temp_dict: {}".format(temp_dict))
+        LOG.info("Reminders: {}".format(event_reminders))
+
+    def check_reminders(self):
+        LOG.info("Checking reminders")
+        e_reminder = event_reminders.copy()
+        for event_summary in e_reminder:
+            value = e_reminder[event_summary]
+            reminder_list = value["reminders"]
+            if reminder_list == []:
+                LOG.info("no reminders for {}".format(event_summary))
+                pass
             else:
-                #If the reminder is not handled perform some checks
-                remind_time = e_start - timedelta(minutes=reminder) # get the time when you want to remind the user
-                now = to_local_tz(datetime.utcnow()) #Get current local time
-                remaining_minutes = self.convert_to_minutes(remind_time, now) #calculate the remaining minutes
+                event = value["event"] 
+                event_start = event['start'].get('dateTime')
+                e_start = datetime.fromisoformat(event_start)
+                for reminder in reminder_list:
+                    #If the reminder is not handled perform some checks
+                    remind_time = e_start - timedelta(minutes=reminder) # get the time when you want to remind the user
+                    now = to_local_tz(datetime.utcnow()) #Get current local time
+                    remaining_minutes = self.convert_to_minutes(remind_time, now) #calculate the remaining minutes
+                    LOG.info("User will be reminded for {} in {} minutes".format(event_summary, remaining_minutes))
+                    
+                    if now > remind_time:
+                        #Send the user a reminder                          
+                        play_wav(REMINDER_PING)
+                        # handled_reminders[event_summary][str(e_start)]['handled'].append(reminder)
+                        data={'summary':event_summary,'time':reminder}
+                        self.speak_dialog("Reminder",data)
+                        reminder_list.remove(reminder)
+
+
+    # def check_event_reminders(self, msg=None):
+    #     LOG.info("Searching for reminders...")
+    #     now = datetime.utcnow()
+    #     now_iso = now.isoformat() + 'Z' 
+    #     tomorrow = (now + timedelta(days=1)).replace(hour=0,minute=0,second=0).isoformat() + 'Z'  # 'Z' indicates UTC time
+        
+    #     #Get first ten events
+    #     eventsResult = self.service.events().list(
+    #         calendarId='primary', timeMin=now_iso, maxResults=10,
+    #         singleEvents=True, orderBy='startTime').execute()
+    #     events = eventsResult.get('items', [])
+        
+    #     if not events:
+    #         LOG.info("[Event_reminders] - no events today...")
+    #     else:
+    #         for event in events:
+    #             if not is_wholeday_event(event): #only check the non wholeday events
+    #                 self.add_reminder(event)
+        
+    # def add_reminder(self, event):
+    #     #get the start_time and convert from UTC ISO format to datetime format
+    #     event_start = event['start'].get('dateTime')
+    #     e_start = datetime.fromisoformat(event_start)
+        
+    #     #construct dict to keep track of already handled reminders
+    #     event_summary = event['summary']
+    #     if not event_summary in handled_reminders:
+    #         handled_reminders[event_summary] = {}
+    #     if not str(e_start) in handled_reminders[event_summary]:
+    #         handled_reminders[event_summary][str(e_start)] = {}
+    #     if not 'handled' in handled_reminders[event_summary][str(e_start)]:
+    #         handled_reminders[event_summary][str(e_start)]['handled'] = []
+                 
+    #     #retrieve the list of reminders known by google calendar
+    #     #check for default reminders
+    #     event_reminders = event['reminders']
+    #     reminder_list = []
+    #     if 'useDefault' in event_reminders:
+    #         reminder_default = event_reminders['useDefault']
+    #         if reminder_default:
+    #             reminder_list.append(10)
+        
+    #     #check for custom created reminders
+    #     if 'overrides' in event_reminders:
+    #         reminder_override = event_reminders['overrides']
+    #         for rem in reminder_override:
+    #             reminder_list.append(rem['minutes'])
+        
+    #     for reminder in reminder_list:
+    #         #check if reminder is already handled
+    #         if reminder in handled_reminders[event_summary][str(e_start)]['handled']:
+    #             LOG.debug(f"reminder {reminder} for {event_summary} already handled!")
+    #         else:
+    #             #If the reminder is not handled perform some checks
+    #             remind_time = e_start - timedelta(minutes=reminder) # get the time when you want to remind the user
+    #             now = to_local_tz(datetime.utcnow()) #Get current local time
+    #             remaining_minutes = self.convert_to_minutes(remind_time, now) #calculate the remaining minutes
                 
-                if now > remind_time:
-                    #Send the user a reminder                          
-                    play_wav(REMINDER_PING)
-                    handled_reminders[event_summary][str(e_start)]['handled'].append(reminder)
-                    data={'summary':event_summary,'time':reminder}
-                    self.speak_dialog("Reminder",data)
+    #             if now > remind_time:
+    #                 #Send the user a reminder                          
+    #                 play_wav(REMINDER_PING)
+    #                 handled_reminders[event_summary][str(e_start)]['handled'].append(reminder)
+    #                 data={'summary':event_summary,'time':reminder}
+    #                 self.speak_dialog("Reminder",data)
             
     def convert_to_minutes(self, first_datetime, second_datetime):
         # Calculate the difference between two time variables in minutes  
